@@ -2150,6 +2150,8 @@ void mmc_rescan(struct work_struct *work)
 	/*
 	*Samsung DFMS class for sd insert detect
 	*/
+#ifndef CONFIG_ARCH_VEXPRESS
+#ifndef CONFIG_ARCH_VEXPRESS
 	if (host->index == SEC_SDCARD_INDEX) {
 		if (host->ops->get_cd && host->ops->get_cd(host) == 0)
 			is_sdcard_status = 0;
@@ -2170,6 +2172,8 @@ void mmc_rescan(struct work_struct *work)
 		}
 	}
 
+#endif
+#endif
 	if (host->ops->get_cd && host->ops->get_cd(host) == 0) {
 		mmc_claim_host(host);
 		mmc_power_off(host);

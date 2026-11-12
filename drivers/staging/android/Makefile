@@ -14,3 +14,7 @@ obj-$(CONFIG_ANDROID_INTF_ALARM_DEV)	+= alarm-poweroff.o
 obj-$(CONFIG_PERSISTENT_TRACER)		+= trace_persistent.o
 
 CFLAGS_REMOVE_trace_persistent.o = -pg
+
+# Keep Binder API mismatches visible while porting from newer kernels.
+CFLAGS_REMOVE_binder.o = -w
+CFLAGS_binder.o += -Werror

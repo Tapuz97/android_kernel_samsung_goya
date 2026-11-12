@@ -1476,12 +1476,7 @@ EXPORT_SYMBOL(sock_rfree);
 
 int sock_i_uid(struct sock *sk)
 {
-	int uid;
-
-	read_lock_bh(&sk->sk_callback_lock);
-	uid = sk->sk_socket ? SOCK_INODE(sk->sk_socket)->i_uid : 0;
-	read_unlock_bh(&sk->sk_callback_lock);
-	return uid;
+	return ACCESS_ONCE(sk->sk_uid);
 }
 EXPORT_SYMBOL(sock_i_uid);
 
@@ -2097,8 +2092,11 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 		sk->sk_type	=	sock->type;
 		sk->sk_wq	=	sock->wq;
 		sock->sk	=	sk;
-	} else
+		sk->sk_uid	=	SOCK_INODE(sock)->i_uid;
+	} else {
 		sk->sk_wq	=	NULL;
+		sk->sk_uid	=	0;
+	}
 
 	spin_lock_init(&sk->sk_dst_lock);
 	rwlock_init(&sk->sk_callback_lock);

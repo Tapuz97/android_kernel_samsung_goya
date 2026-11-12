@@ -17,6 +17,12 @@
 #include <net/sock.h>
 #include <net/fib_rules.h>
 
+#define INVALID_UID ((uid_t) -1)
+#define uid_valid(uid) ((uid) != -1)
+#define uid_lte(a, b) ((a) <= (b))
+#define uid_eq(a, b) ((a) == (b))
+#define uid_gte(a, b) ((a) >= (b))
+
 int fib_default_rule_add(struct fib_rules_ops *ops,
 			 u32 pref, u32 table, u32 flags)
 {
@@ -31,6 +37,8 @@ int fib_default_rule_add(struct fib_rules_ops *ops,
 	r->pref = pref;
 	r->table = table;
 	r->flags = flags;
+	r->uid_start = INVALID_UID;
+	r->uid_end = INVALID_UID;
 	r->fr_net = hold_net(ops->fro_net);
 
 	/* The lock is not required here, the list in unreacheable
@@ -177,6 +185,13 @@ void fib_rules_unregister(struct fib_rules_ops *ops)
 }
 EXPORT_SYMBOL_GPL(fib_rules_unregister);
 
+static int fib_uid_range_match(struct flowi *fl, struct fib_rule *rule)
+{
+	return (!uid_valid(rule->uid_start) && !uid_valid(rule->uid_end)) ||
+	       (uid_gte(fl->flowi_uid, rule->uid_start) &&
+		uid_lte(fl->flowi_uid, rule->uid_end));
+}
+
 static int fib_rule_match(struct fib_rule *rule, struct fib_rules_ops *ops,
 			  struct flowi *fl, int flags)
 {
@@ -189,6 +204,9 @@ static int fib_rule_match(struct fib_rule *rule, struct fib_rules_ops *ops,
 		goto out;
 
 	if ((rule->mark ^ fl->flowi_mark) & rule->mark_mask)
+		goto out;
+
+	if (!fib_uid_range_match(fl, rule))
 		goto out;
 
 	ret = ops->match(rule, fl, flags);
@@ -361,6 +379,25 @@ static int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 	} else if (rule->action == FR_ACT_GOTO)
 		goto errout_free;
 
+	/* Keep per-app selectors; never accept them as wildcard rules. */
+	rule->uid_start = rule->uid_end = INVALID_UID;
+	if (tb[FRA_L3MDEV]) {
+		err = -EOPNOTSUPP;
+		goto errout_free;
+	}
+	if (tb[FRA_UID_RANGE]) {
+		const struct fib_rule_uid_range *range;
+		err = -EINVAL;
+		if (nla_len(tb[FRA_UID_RANGE]) != sizeof(*range))
+			goto errout_free;
+		range = nla_data(tb[FRA_UID_RANGE]);
+		if (!uid_valid(range->start) || !uid_valid(range->end) ||
+		    range->start > range->end)
+			goto errout_free;
+		rule->uid_start = range->start;
+		rule->uid_end = range->end;
+	}
+
 	err = ops->configure(rule, skb, frh, tb);
 	if (err < 0)
 		goto errout_free;
@@ -466,6 +503,17 @@ static int fib_nl_delrule(struct sk_buff *skb, struct nlmsghdr* nlh, void *arg)
 		    (rule->mark_mask != nla_get_u32(tb[FRA_FWMASK])))
 			continue;
 
+		if (tb[FRA_UID_RANGE]) {
+			const struct fib_rule_uid_range *range;
+			if (nla_len(tb[FRA_UID_RANGE]) != sizeof(*range)) {
+				err = -EINVAL;
+				goto errout;
+			}
+			range = nla_data(tb[FRA_UID_RANGE]);
+			if (rule->uid_start != range->start || rule->uid_end != range->end)
+				continue;
+		}
+
 		if (!ops->compare(rule, frh, tb))
 			continue;
 
@@ -520,7 +568,8 @@ static inline size_t fib_rule_nlmsg_size(struct fib_rules_ops *ops,
 			 + nla_total_size(4) /* FRA_PRIORITY */
 			 + nla_total_size(4) /* FRA_TABLE */
 			 + nla_total_size(4) /* FRA_FWMARK */
-			 + nla_total_size(4); /* FRA_FWMASK */
+			 + nla_total_size(4) /* FRA_FWMASK */
+			 + nla_total_size(sizeof(struct fib_rule_uid_range));
 
 	if (ops->nlmsg_payload)
 		payload += ops->nlmsg_payload(rule);
@@ -577,6 +626,11 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 
 	if (rule->target)
 		NLA_PUT_U32(skb, FRA_GOTO, rule->target);
+
+	if (uid_valid(rule->uid_start)) {
+		struct fib_rule_uid_range range = { rule->uid_start, rule->uid_end };
+		NLA_PUT(skb, FRA_UID_RANGE, sizeof(range), &range);
+	}
 
 	if (ops->fill(rule, skb, frh) < 0)
 		goto nla_put_failure;

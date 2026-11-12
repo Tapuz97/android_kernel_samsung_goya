@@ -4273,6 +4273,11 @@ extern unsigned int lpcharge;
 static int __devinit bt532_ts_init(void)
 {
 	pr_info("[TSP]: %s\n", __func__);
+#if defined(CONFIG_MACH_GOYA)
+	/* The GOYA custom ROM starts Android even when the bootloader passes
+	 * lpcharge=1. Keep input available in that boot path as well. */
+	return i2c_add_driver(&bt532_ts_driver);
+#else
 #if defined(CONFIG_SPA) || defined(CONFIG_SPA_LPM_MODE)
 	if (!spa_lpm_charging_mode_get())
 #else
@@ -4281,6 +4286,7 @@ static int __devinit bt532_ts_init(void)
 		return i2c_add_driver(&bt532_ts_driver);
 	else
 		return 0;
+#endif
 }
 
 static void __exit bt532_ts_exit(void)

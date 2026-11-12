@@ -47,6 +47,7 @@ int create_user_ns(struct cred *new)
 	/* set the new root user in the credentials under preparation */
 	ns->creator = new->user;
 	new->user = root_user;
+	cap_clear(new->cap_ambient);
 	new->uid = new->euid = new->suid = new->fsuid = 0;
 	new->gid = new->egid = new->sgid = new->fsgid = 0;
 	put_group_info(new->group_info);

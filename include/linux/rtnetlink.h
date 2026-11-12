@@ -283,6 +283,8 @@ enum rtattr_type_t {
 	RTA_MP_ALGO, /* no longer used */
 	RTA_TABLE,
 	RTA_MARK,
+	/* Values17..24 are reserved for upstream route attributes. */
+	RTA_UID = 25,
 	__RTA_MAX
 };
 

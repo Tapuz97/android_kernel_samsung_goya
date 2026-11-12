@@ -46,7 +46,9 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
+#ifdef CONFIG_ARCH_MMP
 #include <mach/sec_debug.h>
+#endif
 
 /*
  * Architectures can override it:

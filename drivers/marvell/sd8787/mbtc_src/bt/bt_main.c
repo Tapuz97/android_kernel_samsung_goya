@@ -1836,7 +1836,7 @@ sbi_register_conf_dpc(bt_private * priv)
 
 		/** chmod & chown for BT char device */
 		mbtchar_chown(dev_file, AID_SYSTEM, AID_BLUETOOTH);
-		mbtchar_chmod(dev_file, 0666);
+		mbtchar_chmod(dev_file, 0660);
 
 		/** create proc device */
 		snprintf(priv->bt_dev.m_dev[BT_SEQ].name,
@@ -1894,7 +1894,7 @@ sbi_register_conf_dpc(bt_private * priv)
 				  MODULE_NAME, fm_dev->name);
 
 		/** chmod for FM char device */
-		mbtchar_chmod(dev_file, 0666);
+		mbtchar_chmod(dev_file, 0660);
 
 		/** create proc device */
 		snprintf(priv->bt_dev.m_dev[FM_SEQ].name,
@@ -1950,7 +1950,7 @@ sbi_register_conf_dpc(bt_private * priv)
 				  nfc_dev->name);
 
 		/** chmod for NFC char device */
-		mbtchar_chmod(dev_file, 0666);
+		mbtchar_chmod(dev_file, 0660);
 
 		/** create proc device */
 		snprintf(priv->bt_dev.m_dev[NFC_SEQ].name,
@@ -2003,7 +2003,7 @@ sbi_register_conf_dpc(bt_private * priv)
 				  debug_dev->name);
 
 		/** chmod for debug char device */
-		mbtchar_chmod(dev_file, 0666);
+		mbtchar_chmod(dev_file, 0660);
 
 		/** create proc device */
 		snprintf(priv->bt_dev.m_dev[DEBUG_SEQ].name,

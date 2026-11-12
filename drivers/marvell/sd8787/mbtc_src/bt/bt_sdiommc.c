@@ -20,6 +20,16 @@
  */
 
 #include <linux/firmware.h>
+#include <linux/module.h>
+
+/* A shared Wi-Fi/BT chip may already run the matching combo firmware.
+ * Bring-up can require that state without attempting a second download.
+ */
+static bool require_fw_ready;
+module_param(require_fw_ready, bool, 0444);
+MODULE_PARM_DESC(require_fw_ready,
+                "Require active combo firmware; never download if it is absent");
+
 #include <linux/mmc/sdio_func.h>
 
 #include "bt_drv.h"
@@ -1691,6 +1701,12 @@ sbi_download_fw(bt_private * priv)
 			goto err_register;
 		}
 		goto exit;
+	}
+
+	if (require_fw_ready) {
+		PRINTM(ERROR, "BT: existing firmware required; download blocked\n");
+		sdio_release_host(card->func);
+		return BT_STATUS_FAILURE;
 	}
 	/* Check if other interface is downloading */
 	ret = sd_check_winner_status(priv, &winner);

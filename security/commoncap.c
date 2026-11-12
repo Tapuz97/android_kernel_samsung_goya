@@ -274,6 +274,16 @@ int cap_capset(struct cred *new,
 	new->cap_effective   = *effective;
 	new->cap_inheritable = *inheritable;
 	new->cap_permitted   = *permitted;
+
+	/*
+	 * Mask off ambient bits that are no longer both permitted and
+	 * inheritable.
+	 */
+	new->cap_ambient = cap_intersect(new->cap_ambient,
+					 cap_intersect(*permitted,
+						       *inheritable));
+	if (WARN_ON(!cap_ambient_invariant_ok(new)))
+		return -EINVAL;
 	return 0;
 }
 
@@ -354,6 +364,7 @@ static inline int bprm_caps_from_vfs_caps(struct cpu_vfs_cap_data *caps,
 
 		/*
 		 * pP' = (X & fP) | (pI & fI)
+		 * The addition of pA' is handled later.
 		 */
 		new->cap_permitted.cap[i] =
 			(new->cap_bset.cap[i] & permitted) |
@@ -482,7 +493,7 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
 {
 	const struct cred *old = current_cred();
 	struct cred *new = bprm->cred;
-	bool effective, has_cap = false;
+	bool effective, has_cap = false, is_setid;
 	int ret;
 
 	effective = false;
@@ -523,14 +534,17 @@ skip:
 
 
 	/* Don't let someone trace a set[ug]id/setpcap binary with the revised
-	 * credentials unless they have the appropriate permit
+	 * credentials unless they have the appropriate permit.
+	 *
+	 * In addition, if NO_NEW_PRIVS, then ensure we get no new privs.
 	 */
-	if ((new->euid != old->uid ||
-	     new->egid != old->gid ||
+	is_setid = new->euid != old->uid || new->egid != old->gid;
+	if ((is_setid ||
 	     !cap_issubset(new->cap_permitted, old->cap_permitted)) &&
 	    bprm->unsafe & ~LSM_UNSAFE_PTRACE_CAP) {
 		/* downgrade; they get no more than they had, and maybe less */
-		if (!capable(CAP_SETUID)) {
+		if (!capable(CAP_SETUID) ||
+		    (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS)) {
 			new->euid = new->uid;
 			new->egid = new->gid;
 		}
@@ -541,10 +555,30 @@ skip:
 	new->suid = new->fsuid = new->euid;
 	new->sgid = new->fsgid = new->egid;
 
+	/* File caps or setid cancels ambient. */
+	if (has_cap || is_setid)
+		cap_clear(new->cap_ambient);
+	else
+		new->cap_ambient = old->cap_ambient;
+
+	/*
+	 * Now that we've computed pA', update pP' to give:
+	 *   pP' = (X & fP) | (pI & fI) | pA'
+	 */
+	new->cap_permitted = cap_combine(new->cap_permitted, new->cap_ambient);
+
+	/*
+	 * Set pE' = (fE ? pP' : pA').  Because pA' is zero if fE is set,
+	 * this is the same as pE' = (fE ? pP' : 0) | pA'.
+	 */
 	if (effective)
 		new->cap_effective = new->cap_permitted;
 	else
-		cap_clear(new->cap_effective);
+		new->cap_effective = new->cap_ambient;
+
+	if (WARN_ON(!cap_ambient_invariant_ok(new)))
+		return -EPERM;
+
 	bprm->cap_effective = effective;
 
 	/*
@@ -559,7 +593,7 @@ skip:
 	 * Number 1 above might fail if you don't have a full bset, but I think
 	 * that is interesting information to audit.
 	 */
-	if (!cap_isclear(new->cap_effective)) {
+	if (!cap_issubset(new->cap_effective, new->cap_ambient)) {
 		if (!cap_issubset(CAP_FULL_SET, new->cap_effective) ||
 		    new->euid != 0 || new->uid != 0 ||
 		    issecure(SECURE_NOROOT)) {
@@ -570,6 +604,10 @@ skip:
 	}
 
 	new->securebits &= ~issecure_mask(SECURE_KEEP_CAPS);
+
+	if (WARN_ON(!cap_ambient_invariant_ok(new)))
+		return -EPERM;
+
 	return 0;
 }
 
@@ -590,7 +628,7 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
 	if (cred->uid != 0) {
 		if (bprm->cap_effective)
 			return 1;
-		if (!cap_isclear(cred->cap_permitted))
+		if (!cap_issubset(cred->cap_permitted, cred->cap_ambient))
 			return 1;
 	}
 
@@ -686,10 +724,12 @@ int cap_inode_removexattr(struct dentry *dentry, const char *name)
 static inline void cap_emulate_setxuid(struct cred *new, const struct cred *old)
 {
 	if ((old->uid == 0 || old->euid == 0 || old->suid == 0) &&
-	    (new->uid != 0 && new->euid != 0 && new->suid != 0) &&
-	    !issecure(SECURE_KEEP_CAPS)) {
-		cap_clear(new->cap_permitted);
-		cap_clear(new->cap_effective);
+	    (new->uid != 0 && new->euid != 0 && new->suid != 0)) {
+		if (!issecure(SECURE_KEEP_CAPS)) {
+			cap_clear(new->cap_permitted);
+			cap_clear(new->cap_effective);
+		}
+		cap_clear(new->cap_ambient);
 	}
 	if (old->euid == 0 && new->euid != 0)
 		cap_clear(new->cap_effective);
@@ -919,6 +959,35 @@ int cap_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 		else
 			new->securebits &= ~issecure_mask(SECURE_KEEP_CAPS);
 		goto changed;
+
+	case PR_CAP_AMBIENT:
+		error = -EINVAL;
+		if (arg2 == PR_CAP_AMBIENT_CLEAR_ALL) {
+			if (arg3 | arg4 | arg5)
+				goto error;
+			cap_clear(new->cap_ambient);
+			goto changed;
+		}
+		if (!cap_valid(arg3) || arg4 || arg5)
+			goto error;
+		switch (arg2) {
+		case PR_CAP_AMBIENT_IS_SET:
+			error = !!cap_raised(new->cap_ambient, arg3);
+			goto no_change;
+		case PR_CAP_AMBIENT_RAISE:
+			error = -EPERM;
+			if (!cap_raised(new->cap_permitted, arg3) ||
+			    !cap_raised(new->cap_inheritable, arg3) ||
+			    issecure(SECURE_NO_CAP_AMBIENT_RAISE))
+				goto error;
+			cap_raise(new->cap_ambient, arg3);
+			goto changed;
+		case PR_CAP_AMBIENT_LOWER:
+			cap_lower(new->cap_ambient, arg3);
+			goto changed;
+		default:
+			goto error;
+		}
 
 	default:
 		/* No functionality available - continue with default */
